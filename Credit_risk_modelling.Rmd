@@ -1,0 +1,186 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    theme: united
+  html_notebook: default
+  pdf_document: default
+---
+EDA 
+--------------
+Lets start with analyzing the data. First lets talk about the target variable, i.e. loan status. Understand the various graph plots
+```{r,echo=TRUE}
+loan <- readRDS("./Loandata.rds")
+names(loan)
+dim(loan)
+str(loan)
+summary(loan)
+library(ggplot2)
+ggplot() + geom_histogram(aes(x = loan$int_rate,fill=int_rate), binwidth=1,addMeanLine=TRUE,alpha=0.5,removePanelGrid=TRUE, fill = "red")+geom_col()
+hist(loan$loan_amnt, ylim = c(0,8000),col=heat.colors(3))
+barplot(table(loan$grade),ylim = c(0,9000),col=heat.colors(6))
+par(mfrow=c(3,3))
+boxplot(loan$loan_status,col = "red")
+boxplot(loan$loan_amnt,col = "red")
+boxplot(loan$emp_length,col = "red")
+boxplot(loan$int_rate,col = "red")
+boxplot(loan$annual_inc,col = "red")
+boxplot(loan$age,col = "red")
+```
+Plot For Depicting Relationship
+--------------
+Lets see how the grade and home ownership relate to each other.
+```{r}
+ggplot(loan,aes(grade,int_rate))+geom_boxplot(aes(fill=grade))+theme(axis.text.x = element_blank())
+ggplot(loan,aes(home_ownership,int_rate))+geom_boxplot(aes(fill=home_ownership))+theme(axis.text.x = element_blank())
+ggplot(loan,aes(int_rate,fill=grade))+geom_density()+facet_grid(grade ~ .)
+```
+
+Relationship
+-------------
+Now lets understand the relationship between various components.
+```{r}
+library(gmodels)
+CrossTable(loan$loan_status) #11% are loan defaulters
+
+CrossTable(loan$grade, loan$loan_status, prop.r = TRUE, 
+           prop.c = F, prop.t = F, prop.chisq = F)
+```
+```{r,echo=TRUE}
+#Spotting outliers using histogram and scatterplots
+hist_1 <- hist(loan$loan_amnt)
+hist_1$breaks
+
+hist_2 <- hist(loan$loan_amnt, breaks = 200, xlab = "Loan Amount", 
+               main = "Histogram of the loan amount")
+
+plot(loan$age, ylab = "Age")
+
+```
+
+Outlier Removal
+-----------------
+Now we have to remove the outlier from age
+```{r}
+outlier_index <- which(loan$age > 122) 
+
+loan2 <- loan[-outlier_index,]
+plot(loan2$age)
+```
+Now annual income
+------------------
+Lets remove the outlier from annual income.
+```{r,echo=TRUE}
+plot(loan$age, loan$annual_inc, xlab = "Age", ylab = "Annual Income")
+
+```
+We can see annual income has an outlier, lets get rid of it
+```{r}
+outlier_index_ai <- which(loan$annual_inc == 6000000)
+loan <- loan[-outlier_index_ai, ]
+plot(loan$annual_inc)
+```
+Missing Value
+-----------------
+Now lets talk about Interest rate
+```{r}
+summary(loan$int_rate)
+na_index <- which(is.na(loan$int_rate))
+#loan2 <- loan[-na_index, ]
+#sum(is.na(loan2$int_rate))
+```
+```{r}
+#Replacing missing values with median
+median_ir <- median(loan$int_rate, na.rm = TRUE)
+loan$int_rate[na_index] <- median_ir
+summary(loan$int_rate)
+```
+```{r}
+#find correlation matrix
+summary(loan$emp_length)
+na_index_emp <- which(is.na(loan$emp_length))
+median_emp <- median(loan$emp_length, na.rm = TRUE)
+loan$emp_length[na_index_emp] <- median_emp
+summary(loan$emp_length)
+```
+Correlation Matrix
+-----------------
+Lets check if there is some colineraity dependency between predictors or not.
+```{r}
+cor(loan[sapply(loan, function(x) !is.factor(x))])
+
+```
+```{r,echo=TRUE}
+#library(ggplot2)
+#color <- scale_fill_brewer("Loan Grades",palette = "Reds")
+#ggplot(loan,aes(x = annual_inc,fill = factor(grade))) +
+ # geom_histogram(binwidth = 1) + color + facet_grid(grade ~. )
+```
+Logistic Regression
+---------------------
+Start fitting the model
+```{r}
+#Data Splitting into train and test data
+
+set.seed(1111)
+
+#Row numbers for training set
+index_train <- sample(1:nrow(loan), 2/3 * nrow(loan)) #2/3 of dataset
+
+loan_train <- loan[index_train, ]
+loan_test <- loan[-index_train, ]
+
+```
+```{r}
+lr_loan <- glm(loan_status~ age + int_rate + grade + loan_amnt +
+                 annual_inc, family = "binomial", data = loan_train )
+summary(lr_loan)
+```
+Performance Analysis
+-------------------
+Lets find out the confusion matrix, and find the accuracy.
+```{r}
+loan_predict <- predict(lr_loan, loan_test, type = "response")
+range(loan_predict,na.rm = T)
+```
+```{r}
+lr_cutoff <- ifelse(loan_predict > 0.35, 1, 0)
+tab_cm <- table(loan_test$loan_status, lr_cutoff)
+tab_cm
+```
+```{r}
+#accuracy calculation
+acc_logit <- sum(diag(tab_cm)) / nrow(loan_test)
+acc_logit
+```
+```{r}
+library(pROC)
+
+#ROC curve for Logistic Regression
+roc_logit <- roc(loan_test$loan_status, loan_predict)
+
+plot(roc_logit)
+
+auc(roc_logit)  #0.658
+
+```
+
+
+```{r}
+library(ggplot2)
+ggplot(loan_test, aes(age, as.numeric(loan_status), color=home_ownership))  +
+geom_point(position=position_jitter(height=0.03, width=0)) +
+xlab("Age") + ylab("Pr (survived)")
+```
+```{r}
+graph <- ggplot(loan_test, aes(x=int_rate, y=loan_status)) +
+    stat_smooth(method="glm",
+                method.args = list(family="binomial"), se=TRUE,
+                fullrange=TRUE) +
+    labs(x="Interest Rate", y="Percentage")+
+    expand_limits(x=20)
+graph
+```
